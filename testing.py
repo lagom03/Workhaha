@@ -1,1 +1,0 @@
-print("something about testing\n");

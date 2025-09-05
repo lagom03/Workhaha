@@ -29,6 +29,7 @@ from datetime import datetime
 from collections import deque
 from torchvision import transforms
 from efficientnet_pytorch import EfficientNet
+import mysql.connector
 
 # ============================= 可調參數 ============================= #
 MODEL_PATH = r'C:\Users\USER\Desktop\pressure_ulcer_posture_recognition\model\runs\exp1_full\efficientnet_depth_model.pth'  # 或 .ckpt
@@ -358,18 +359,7 @@ def post_record_to_api(metadata: dict, folder: str):
     if not ENABLE_API_POST:
         return
 
-    image_paths = {
-        "rgb_masked_raw": to_posix(os.path.join(folder, 'rgb_masked_raw.jpg')),
-        "rgb_masked_annotated": to_posix(os.path.join(folder, 'rgb_masked_annotated.jpg')),
-        "sacrum_depth_proc": to_posix(os.path.join(folder, 'sacrum_depth_proc.png')),
-        "heel_depth_proc": to_posix(os.path.join(folder, 'heel_depth_proc.png')),
-    }
-
-    payload = {
-        "data": metadata,   # 你的 9 個欄位
-        "folder": to_posix(folder),
-        "image_paths": image_paths,
-    }
+ _
 
     tries = 1 + max(0, int(API_RETRY))
     for attempt in range(1, tries + 1):
@@ -388,84 +378,59 @@ def post_record_to_api(metadata: dict, folder: str):
                 return
 
 # ============================= 存檔（含自動打 API）============================= #
-def save_capture(class_names,
-                 masked_clean,           # 只做人臉馬賽克、無任何框/文字
-                 sacrum_depth_proc,
-                 heel_depth_proc,
-                 sacrum_pred, sacrum_prob,
-                 heel_pred, heel_prob,
-                 sacrum_bbox, heel_bbox,
-                 face_box,               # 讓標籤排版避開臉
-                 quality_dict,
-                 reason="cycle_best",
-                 analysis_elapsed=None,
-                 camera_meta=None):
-    day_folder = datetime.now().strftime('%Y%m%d')
-    root_day = os.path.join(CAPTURE_ROOT, day_folder); os.makedirs(root_day, exist_ok=True)
-    ts = datetime.now().strftime('%H%M%S_%f')[:-3]
-    folder = os.path.join(root_day, ts); os.makedirs(folder, exist_ok=True)
-
-    # 1) raw：只有臉部馬賽克，無框
-    cv2.imwrite(os.path.join(folder, 'rgb_masked_raw.jpg'),
-                masked_clean, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-
-    # 2) annotated：在 masked_clean 的複本上畫框與標籤
-    annotated = masked_clean.copy()
-    occ=[]
-    if sacrum_bbox != (0,0,0,0) and sacrum_pred is not None:
-        cv2.rectangle(annotated,(sacrum_bbox[0],sacrum_bbox[1]),(sacrum_bbox[2],sacrum_bbox[3]),SACRUM_COLOR,2)
-        sprob = round2(sacrum_prob)
-        stext = f"Sacrum:{class_names[sacrum_pred]}" + (f" {sprob:.2f}" if sprob is not None else "")
-        draw_label(annotated, sacrum_bbox, face_box, occ, stext, SACRUM_COLOR)
-    if heel_bbox != (0,0,0,0) and heel_pred is not None:
-        cv2.rectangle(annotated,(heel_bbox[0],heel_bbox[1]),(heel_bbox[2],heel_bbox[3]),HEEL_COLOR,2)
-        hprob = round2(heel_prob)
-        htext = f"Heel:{class_names[heel_pred]}" + (f" {hprob:.2f}" if hprob is not None else "")
-        draw_label(annotated, heel_bbox, face_box, occ, htext, HEEL_COLOR)
-
-    cv2.imwrite(os.path.join(folder,'rgb_masked_annotated.jpg'), annotated,
-                [int(cv2.IMWRITE_JPEG_QUALITY),85])
-
-    # 3) ROI 深度處理圖
-    if sacrum_depth_proc is not None:
-        cv2.imwrite(os.path.join(folder,'sacrum_depth_proc.png'), sacrum_depth_proc)
-    if heel_depth_proc is not None:
-        cv2.imwrite(os.path.join(folder,'heel_depth_proc.png'), heel_depth_proc)
-
-    # 4) metadata（僅含你指定的 9 個欄位）
-    sacrum_label = class_names[sacrum_pred] if sacrum_pred is not None else ""
-    heel_label   = class_names[heel_pred]   if heel_pred   is not None else ""
-    sacrum_side, sacrum_protection = parse_sacrum_label(sacrum_label)
-
-    timestamp_iso = datetime.now().isoformat(timespec='seconds')  # 到秒
-
-    metadata = {
-        "timestamp_iso": timestamp_iso,
-        "sacrum_class": sacrum_label,
-        "sacrum_side": sacrum_side,
-        "sacrum_protection": sacrum_protection,
-        "sacrum_confidence": round2(sacrum_prob),
-        "heel_class": heel_label,
-        "heel_confidence": round2(heel_prob),
-        "camera_serial": (camera_meta.get("camera_serial") if camera_meta else None)
+def save_capture(metadata, folder):
+    # image_paths dict
+    image_paths = {
+        "rgb_masked_raw": to_posix(os.path.join(folder, 'rgb_masked_raw.jpg')),
+        "rgb_masked_annotated": to_posix(os.path.join(folder, 'rgb_masked_annotated.jpg')),
+        "sacrum_depth_proc": to_posix(os.path.join(folder, 'sacrum_depth_proc.png')),
+        "heel_depth_proc": to_posix(os.path.join(folder, 'heel_depth_proc.png')),
     }
-    if INCLUDE_CAMERA_NAME and camera_meta:
-        metadata["camera_name"] = camera_meta.get("camera_name")
 
-    # 存兩份 metadata（json/txt）於本機
-    with open(os.path.join(folder,'metadata.json'),'w',encoding='utf-8') as f:
+    # flatten into one dict
+    record = {
+        **metadata,      # unpack metadata keys
+        **image_paths,   # unpack image path keys
+        "folder": to_posix(folder)
+    }
+
+    # also save metadata.json and metadata.txt (your original requirement)
+    with open(os.path.join(folder, 'metadata.json'), 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(folder,'metadata.txt'),'w',encoding='utf-8') as f:
-        for k,v in metadata.items():
+    with open(os.path.join(folder, 'metadata.txt'), 'w', encoding='utf-8') as f:
+        for k, v in metadata.items():
             f.write(f"{k}={v}\n")
 
-    # 5) 打 API 寫 DB（失敗不會中斷主程式）
-    try:
-        post_record_to_api(metadata, folder)
-    except Exception as e:
-        print(f"[API] unexpected error: {e}")
+    # insert into MySQL
+    insert_record(record)
 
-    return folder
+    def insert_record(record):
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="your_user",
+        password="your_password",
+        database="your_db"
+    )
+    cursor = conn.cursor()
+
+    sql = """
+    INSERT INTO posture_records2
+    (timestamp_iso, sacrum_class, sacrum_side, sacrum_protection,
+     sacrum_confidence, heel_class, heel_confidence, camera_serial, camera_name,
+     folder, rgb_masked_raw, rgb_masked_annotated, sacrum_depth_proc, heel_depth_proc)
+    VALUES (%(timestamp_iso)s, %(sacrum_class)s, %(sacrum_side)s, %(sacrum_protection)s,
+            %(sacrum_confidence)s, %(heel_class)s, %(heel_confidence)s, %(camera_serial)s, %(camera_name)s,
+            %(folder)s, %(rgb_masked_raw)s, %(rgb_masked_annotated)s, %(sacrum_depth_proc)s, %(heel_depth_proc)s)
+    """
+
+    # convert timestamp string → datetime
+    if isinstance(record.get("timestamp_iso"), str):
+        record["timestamp_iso"] = datetime.fromisoformat(record["timestamp_iso"])
+
+    cursor.execute(sql, record)
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 # ============================= 主程式 ============================= #
 def main():

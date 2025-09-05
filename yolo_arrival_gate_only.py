@@ -58,9 +58,7 @@ START_TIMEOUT_SECONDS = 7.0
 # 觸發方式（二選一）：
 TRIGGER_MODE = 'subprocess'         # 'http' 或 'subprocess'
 TRIGGER_HTTP_URL = 'http://127.0.0.1:5055/trigger/start'
-TRIGGER_SUBPROCESS_CMD = [
-    'python', r'C:\Users\USER\Desktop\pressure_ulcer_posture_recognition\realtime_9_API.py'
-]
+TRIGGER_SUBPROCESS_CMD = ['python', 'realtime_9_API.py']
 TRIGGER_SUBPROCESS_ENV = os.environ.copy()
 
 # ====== 語音（pyttsx3） ======
